@@ -13,16 +13,20 @@ app.use((req, res, next) => {
   next();
 });
 
-// Required: GET / — with caching headers + conditional request support
-app.get('/', (req, res) => {
+// Apply caching headers + conditional request handling to every route
+app.use((req, res, next) => {
   res.setHeader('Cache-Control', 'max-age=60');
   res.setHeader('ETag', ETAG_VALUE);
 
-  // Check if client's cached copy is still valid
   if (req.headers['if-none-match'] === ETAG_VALUE) {
-    return res.status(304).end();  // No body — tells client to reuse its cache
+    return res.status(304).end();  // Short-circuits — route handler below never runs
   }
 
+  next();
+});
+
+// Required: GET /
+app.get('/', (req, res) => {
   res.send(`<h1>Backend ${BACKEND} running</h1><p>Service is up.</p>`);
 });
 
