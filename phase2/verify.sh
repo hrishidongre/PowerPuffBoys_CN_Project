@@ -24,10 +24,23 @@ check_backend() {
 check_dns() {
   echo "DNS service on this Mac"
   pgrep -q dnsmasq && ok "dnsmasq running" || fail "dnsmasq not running"
-  local ans; ans=$(dig @127.0.0.1 "app.$DOMAIN" +noall +answer)
-  echo "$ans" | grep -q "$EDGE_IP" && ok "app.$DOMAIN -> $EDGE_IP" || fail "wrong or missing answer: $ans"
-  local ttl; ttl=$(echo "$ans" | awk '{print $2}' | head -1)
-  [ "$ttl" = "$TTL" ] && ok "TTL is $TTL, as Extension B needs" || fail "TTL is $ttl, expected $TTL"
+  # Older dig still prints its banner with +noall +answer, so pick the A record
+  # line rather than the first line of output.
+  local ans; ans=$(dig @127.0.0.1 "app.$DOMAIN" +nocmd +noall +answer | awk '$4=="A"')
+  echo "$ans" | grep -q "$EDGE_IP" && ok "app.$DOMAIN -> $EDGE_IP" || fail "wrong or missing answer: ${ans:-none}"
+  local ttl; ttl=$(echo "$ans" | awk '$4=="A"{print $2; exit}')
+  [ "$ttl" = "$TTL" ] && ok "TTL is $TTL, as Extension B needs" || fail "TTL is ${ttl:-unreadable}, expected $TTL"
+
+  # Extension A only counts if clients can reach it, so check the LAN address too.
+  local me; me=$(ipconfig getifaddr "$(route get default | awk '/interface:/{print $2}')")
+  if dig @"$me" "app.$DOMAIN" +short +time=2 +tries=1 2>/dev/null | grep -q "$EDGE_IP"; then
+    ok "answers on the LAN address $me, so other Macs can use it"
+  else
+    fail "answers on 127.0.0.1 but NOT on $me - no other Mac can use this resolver"
+    echo "        check: ps aux | grep [d]nsmasq        (is --local-service set)"
+    echo "        check: tail -20 \$(brew --prefix)/var/log/dnsmasq.log"
+    echo "        check: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate"
+  fi
 }
 
 check_edge() {
