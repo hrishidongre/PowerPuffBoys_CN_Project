@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Phase 2 prep</title>
+<style>
+@page { size: A4; margin: 14mm 14mm; }
+* { box-sizing: border-box; }
+body { font: 10.3pt/1.45 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; margin: 0; }
+h1 { font-size: 19pt; margin: 0 0 2mm; letter-spacing: -0.3px; }
+h2 { font-size: 13pt; margin: 7mm 0 2.5mm; padding-bottom: 1.5mm; border-bottom: 1.5px solid #1a1a1a; }
+h3 { font-size: 11pt; margin: 4mm 0 1.5mm; }
+p, li { margin: 0 0 2mm; }
+ul, ol { margin: 0 0 3mm; padding-left: 5mm; }
+.sub { color: #555; font-size: 9.5pt; margin-bottom: 5mm; }
+table { width: 100%; border-collapse: collapse; margin: 0 0 4mm; font-size: 9.5pt; }
+th { text-align: left; background: #f0f0f0; font-weight: 600; }
+th, td { border: 1px solid #c8c8c8; padding: 1.6mm 2.2mm; vertical-align: top; }
+code, pre { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; }
+code { background: #f2f2f2; padding: 0.3mm 1mm; border-radius: 2px; }
+pre { background: #f6f6f6; border-left: 2.5px solid #999; padding: 2.5mm 3mm; margin: 0 0 3mm; overflow: visible; white-space: pre; line-height: 1.35; }
+.diag { font-size: 8.2pt; line-height: 1.3; }
+.q { font-weight: 600; margin-bottom: 0.8mm; }
+.a { margin-bottom: 3mm; }
+h2, h3 { page-break-after: avoid; }
+table, pre, .note { page-break-inside: avoid; }
+.q { page-break-after: avoid; }
+.brk { page-break-before: always; }
+.note { background: #fcf6e3; border-left: 2.5px solid #c9a227; padding: 2.5mm 3mm; margin: 0 0 4mm; font-size: 9.5pt; }
+.who { font-size: 9.5pt; }
+</style></head><body>
+
+<div>
+<h1>Phase 2 prep, in plain words</h1>
+<p class="sub">Team PowerPuffBoys, Section A. Read this once and you can answer anything they ask.</p>
+
+<h2>What we built, in one paragraph</h2>
+<p>Four laptops on the same Wi-Fi, pretending to be a small company's servers. Someone types
+<code>https://app.powerpuffboys.test</code> in a browser. Our own DNS server tells them which machine to
+go to. That machine is nginx, which handles the encryption and then quietly passes the request to one
+of two application servers behind it. The person in the browser never knows there are two servers, and
+never learns their addresses. Phase 1 built that. Phase 2 makes it keep working when parts of it die.</p>
+
+<h2>Who is which machine</h2>
+<table>
+<tr><th>Person</th><th>Machine</th><th>Job</th><th>In cloud terms</th></tr>
+<tr><td>Adi</td><td>Mac 1 <code>10.7.17.223</code></td><td>DNS server, turns the name into an address</td><td>Route 53</td></tr>
+<tr><td>Vetri</td><td>Mac 2 <code>10.7.17.226</code></td><td>nginx, the front door. Handles HTTPS, splits traffic</td><td>Load balancer, CDN edge</td></tr>
+<tr><td>Hrishi</td><td>Mac 3 <code>10.7.8.234</code></td><td>Backend A on port 3001. Also standby front door</td><td>App server instance</td></tr>
+<tr><td>Vedant</td><td>Mac 4 <code>10.7.2.238</code></td><td>Backend B on port 3002, plus the backup DNS</td><td>App server instance</td></tr>
+</table>
+
+<pre class="diag">              dig app.powerpuffboys.test
+   client  ------------------------------->  Mac 1  dnsmasq   (primary DNS)
+     |                                       Mac 4  dnsmasq   (backup DNS)
+     |      answer: Mac 2's address, TTL 30
+     |
+     |      https://app.powerpuffboys.test
+     +------------------------------------>  Mac 2  nginx, encryption ends here
+                                               |
+                                 round robin    +--> Mac 3  Backend A :3001
+                                                +--> Mac 4  Backend B :3002</pre>
+
+<div class="note">Why only four machines when the brief asks for a second DNS server: Vedant's Mac runs
+two things at once. Backend B on port 3002 and a second DNS on port 53. Different ports, no clash.
+The brief only says the backup must not be on Mac 1.</div>
+
+<h2>Starting it up</h2>
+<table>
+<tr><th>Person</th><th>Command</th></tr>
+<tr><td>everyone first</td><td><code>git pull</code></td></tr>
+<tr><td>Adi</td><td><code>./phase2/run.sh dns-primary</code></td></tr>
+<tr><td>Vetri</td><td><code>./phase2/run.sh edge</code></td></tr>
+<tr><td>Hrishi</td><td><code>./phase2/run.sh backend-a</code></td></tr>
+<tr><td>Vedant</td><td><code>./phase2/run.sh backend-b</code> then <code>./phase2/run.sh dns-backup</code></td></tr>
+<tr><td>then each of us</td><td><code>./phase2/verify.sh &lt;same role&gt;</code></td></tr>
+</table>
+<p class="who">If your Wi-Fi reconnects your address can change, and then everything looks broken at once.
+Run <code>./phase2/whoami.sh</code> and tell the group.</p>
+</div>
+
+<div>
+<h2>The one answer to rehearse: what happens when you press Enter</h2>
+<p>If you can tell this story, you can answer most of the paper. Six steps.</p>
+
+<h3>1. The name has to become an address</h3>
+<p>Your Mac does not know what <code>app.powerpuffboys.test</code> means. It asks the DNS server it was
+told to use, Adi's Mac, over <b>UDP port 53</b>. Adi's machine replies "that name is at 10.7.17.226".
+Nothing has connected to anything yet. DNS is a phone book, not a phone call.</p>
+
+<h3>2. Open a connection to that address</h3>
+<p>Now your Mac opens a <b>TCP</b> connection to 10.7.17.226 on <b>port 443</b>. Three messages, the
+handshake: SYN, then SYN-ACK back, then ACK. Both sides are now sure the other can hear them.</p>
+
+<h3>3. Agree on encryption</h3>
+<p>Inside that connection, <b>TLS</b> starts. ClientHello, ServerHello, the server sends its
+certificate, keys are exchanged, Finished. Our certificate is signed by our own small authority,
+"PowerPuffBoys Local CA", which every Mac has been told to trust. From here on everything is
+encrypted, and Wireshark shows only "Application Data".</p>
+
+<h3>4. Ask for the page</h3>
+<p>Only now does the actual <b>HTTP</b> request go out: <code>GET /api/status</code>. It is inside the
+encrypted tunnel, so nobody on the Wi-Fi can read it.</p>
+
+<h3>5. nginx decides who answers</h3>
+<p>nginx decrypts the request and forwards it, as plain HTTP over our trusted LAN, to Hrishi's Mac or
+Vedant's Mac, alternating. This is the only unencrypted hop, and that is deliberate: encryption was
+already done at the front door, and the LAN behind it is ours.</p>
+
+<h3>6. The answer comes back</h3>
+<p>The backend replies with JSON and an <code>X-Backend: A</code> or <code>B</code> header. nginx sends
+it back down the same encrypted connection. Run the request ten times and that header flips between A
+and B, which is the proof that load balancing is real.</p>
+
+<h2>Three things people get wrong</h2>
+<ul>
+<li><b>DNS does not connect you to anything.</b> It only hands back an address. If DNS breaks, the
+address still works if you type it directly.</li>
+<li><b>Encryption stops at nginx.</b> The hop to the backends is plain HTTP. If asked why, say: it was
+already encrypted to the edge, and the backend network is private and trusted.</li>
+<li><b>The client never knows the backend addresses.</b> That is the point of a reverse proxy. We can
+add, remove or move backends and nobody outside notices.</li>
+</ul>
+</div>
+
+<div>
+<h2>What Phase 2 adds, one line each</h2>
+<table>
+<tr><th></th><th>What it is</th><th>How we show it</th></tr>
+<tr><td><b>A</b></td><td>A second DNS server, so losing one does not kill the name</td>
+<td>Adi stops his dnsmasq. Clients keep resolving through Vedant's.</td></tr>
+<tr><td><b>B</b></td><td>Short TTL, so a DNS change takes effect in 30 seconds</td>
+<td>Change the record, show clients still getting the old answer, then the new one after 30s.</td></tr>
+<tr><td><b>C</b></td><td>Firewall so only nginx can talk to the backends</td>
+<td>From a client, port 3001 times out. From nginx, it works.</td></tr>
+<tr><td><b>D</b></td><td>Automatic failover when a backend dies</td>
+<td>Stop Backend A. Every request still returns 200, all from B. Restart it, both come back.</td></tr>
+<tr><td><b>E</b></td><td>Moving the front door by changing DNS</td>
+<td>Point the name at Hrishi's standby nginx. New lookups go there.</td></tr>
+<tr><td><b>F</b></td><td>Diagnosing a fault the faculty injects</td>
+<td>Work bottom up through the layers and say your reasoning out loud.</td></tr>
+</table>
+
+<h3>The one honest weakness, and they will ask</h3>
+<p>Vetri's Mac is a single point of failure. Both backends can be healthy and the service is still dead
+if the front door goes down, because everything flows through it. To fix it you would need two front
+doors sharing one address: two DNS records pointing at both, or an address that can move between them,
+or another balancer in front of the two. Extension E is us doing that move by hand.</p>
+
+<h2>If it breaks: always go bottom up</h2>
+<p>A problem low down makes everything above it look broken, so never start at the browser.
+<code>./phase2/troubleshoot/diagnose.sh</code> walks all five in order and stops at the first failure.</p>
+<table>
+<tr><th>Layer</th><th>Question</th><th>Command</th><th>If it fails</th></tr>
+<tr><td>1 Network</td><td>Can I reach the machine at all?</td><td><code>ping 10.7.17.226</code></td>
+<td>Mac asleep, different Wi-Fi, or address changed</td></tr>
+<tr><td>2 DNS</td><td>Does the name become an address?</td><td><code>dig app.powerpuffboys.test</code></td>
+<td>dnsmasq stopped, or wrong resolver set on this Mac</td></tr>
+<tr><td>3 TCP</td><td>Is the port open?</td><td><code>nc -z 10.7.17.226 443</code></td>
+<td>nginx down, wrong port, or a firewall rule</td></tr>
+<tr><td>4 TLS</td><td>Is the certificate accepted?</td><td><code>openssl s_client -connect 10.7.17.226:443</code></td>
+<td>CA not trusted on this Mac, or the name is not in the certificate</td></tr>
+<tr><td>5 HTTP</td><td>Does the app answer?</td><td><code>curl -i https://app.powerpuffboys.test/api/status</code></td>
+<td>502 means nginx is fine but no backend answered</td></tr>
+</table>
+<div class="note">Say the layer name out loud before you touch anything. Marks are given for the method
+even if you do not finish the fix.</div>
+</div>
+
+<div class="brk">
+<h2>Viva questions and short answers</h2>
+
+<p class="q">Walk me through one request.</p>
+<p class="a">The six steps on page 2. Name the protocol and port at each step.</p>
+
+<p class="q">Why does the client never know the backend addresses?</p>
+<p class="a">Because it only ever talks to nginx. That lets us move, add or remove backends without
+telling anyone, and it means the backends can be firewalled off completely.</p>
+
+<p class="q">Where does TLS stop, and what is unencrypted?</p>
+<p class="a">It stops at nginx on Mac 2. The hop from nginx to the backends is plain HTTP over our own
+LAN. That is normal practice when the internal network is trusted.</p>
+
+<p class="q">What is the difference between DNS failing and a server failing?</p>
+<p class="a">If DNS fails the name does not resolve, but typing the address still works. If the server
+fails the name resolves perfectly and then the connection or the request fails. One is the phone book,
+the other is the phone.</p>
+
+<p class="q">What does the TTL do?</p>
+<p class="a">It is how long a client is allowed to remember an answer. Ours is 30 seconds, so after we
+change a record, clients keep using the old address for up to 30 seconds before asking again. That is
+exactly how real services move traffic between machines.</p>
+
+<p class="q">Why is closing a TCP connection four messages when opening is three?</p>
+<p class="a">Opening is three because the server's "yes" and its own "are you there" fit in one message.
+Closing is four because each side shuts down its own direction separately, and the server may still
+have data to finish sending after the client says it is done.</p>
+
+<p class="q">Why do repeated requests sometimes return 304 instead of 200?</p>
+<p class="a">The first response carries an ETag, a version tag. The next time, the client sends that tag
+back and asks "has it changed?". If not, the server replies 304 Not Modified with no body, which saves
+the whole transfer. A fresh cache hit is different again: the client does not ask at all because the
+<code>Cache-Control: max-age=60</code> has not expired.</p>
+
+<p class="q">Our two backends have different ETags. Does that matter?</p>
+<p class="a">Yes, and it is a good thing to notice. If you cached from A and then revalidate against B,
+B does not recognise the tag and sends a full 200. That is what happens when you load balance without
+sharing cache tags between servers.</p>
+
+<p class="q">What is still a single point of failure?</p>
+<p class="a">The nginx machine. See page 3.</p>
+
+<p class="q">Which layer is Ethernet, IP, TCP, TLS, HTTP?</p>
+<p class="a">Ethernet is the link layer, IP is network, TCP is transport, TLS sits above transport, and
+DNS and HTTP are application. DNS is the odd one out because it uses UDP, not TCP.</p>
+</div>
+
+</body></html>
