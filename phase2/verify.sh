@@ -32,13 +32,38 @@ check_dns() {
 
 check_edge() {
   echo "Edge on this Mac"
-  sudo nginx -t 2>/dev/null && ok "nginx config valid" || fail "nginx -t failed"
+  # nginx -t needs root to read the certificate key. Do not fail the run just
+  # because this shell has no cached sudo credentials.
+  if sudo -n nginx -t 2>/dev/null; then
+    ok "nginx config valid"
+  elif sudo -n true 2>/dev/null; then
+    fail "nginx -t failed"
+  else
+    echo "  SKIP  nginx -t needs sudo - run 'sudo nginx -t' yourself"
+  fi
   pgrep -q nginx && ok "nginx running" || fail "nginx not running"
-  local code; code=$(curl -s -o /dev/null -w '%{http_code}' "https://app.$DOMAIN/api/status")
-  [ "$code" = 200 ] && ok "https works with no -k" || fail "https returned $code"
+  local code; code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "https://app.$DOMAIN/api/status")
+  if [ "$code" = 200 ]; then
+    ok "https works with no -k"
+  else
+    fail "https returned $code"
+    # A 000 on the edge Mac is almost always its own DNS or trust store, not nginx.
+    dig +time=2 +tries=1 "app.$DOMAIN" +short | grep -q . \
+      || echo "        cause: app.$DOMAIN does not resolve here. Run ./phase2/run.sh client"
+    security find-certificate -c "PowerPuffBoys Local CA" /Library/Keychains/System.keychain >/dev/null 2>&1 \
+      || echo "        cause: this Mac does not trust the team CA. Run ./phase2/edge/trust_ca.sh"
+    curl -s -m 5 -o /dev/null -w "        edge itself, bypassing both: status %{http_code}\n" \
+      --cacert "$root/phase2/edge/certs/ca.crt" --resolve "app.$DOMAIN:$EDGE_HTTPS_PORT:$EDGE_IP" \
+      "https://app.$DOMAIN/api/status"
+  fi
   # HTTP/2 hands the headers back lowercased, so match either spelling.
   local seen; seen=$(for i in $(seq 1 10); do curl -s -D- -o /dev/null "https://app.$DOMAIN/api/status" | awk 'tolower($1)=="x-backend:"{print $2}'; done | tr -d '\r' | sort -u | tr '\n' ' ')
-  echo "$seen" | grep -q A && echo "$seen" | grep -q B && ok "load balancing hits both: $seen" || fail "only saw: $seen"
+  if echo "$seen" | grep -q A && echo "$seen" | grep -q B; then
+    ok "load balancing hits both: $seen"
+  else
+    fail "only saw: ${seen:-nothing}"
+    echo "        the other backend is probably not started yet"
+  fi
 }
 
 check_client() {
