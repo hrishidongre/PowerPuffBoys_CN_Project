@@ -1,0 +1,25 @@
+# Team PowerPuffBoys private DNS. Generated from phase2/hosts.env - do not edit by hand.
+port=53
+domain-needed
+bogus-priv
+no-resolv
+no-hosts
+
+# Upstream for everything that is not ours, so clients keep normal internet.
+server=1.1.1.1
+server=8.8.8.8
+
+# Extension B: short TTL so cached answers expire visibly during the demo.
+local-ttl=__TTL__
+
+# Project records. Everything points at the edge (Mac 2).
+# The first line is the phase 1 record: it covers the bare domain and any
+# subdomain. The two below it are more specific, and dnsmasq prefers the
+# longest match, which is what lets Extension E move app. on its own.
+address=/__DOMAIN__/__EDGE_IP__
+address=/app.__DOMAIN__/__EDGE_IP__
+address=/api.__DOMAIN__/__EDGE_IP__
+
+# Evidence for the demo: every query is logged.
+log-queries
+log-facility=__BREW__/var/log/dnsmasq.log
