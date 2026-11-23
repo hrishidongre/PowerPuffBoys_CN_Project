@@ -1,0 +1,466 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Phase 2 Report</title><style>
+@page { size: A4; margin: 15mm 15mm 14mm; }
+* { box-sizing: border-box; }
+body { font: 10.3pt/1.5 -apple-system,"Helvetica Neue",Arial,sans-serif; color:#1a1a1a; margin:0; }
+h1 { font-size: 20pt; margin: 0 0 1mm; letter-spacing:-0.3px; }
+h2 { font-size: 13pt; margin: 7mm 0 2.5mm; padding-bottom:1.5mm; border-bottom:1.5px solid #1a1a1a; page-break-after: avoid; }
+h1 + h2 { border:0; font-size:12pt; font-weight:500; color:#555; margin:0 0 5mm; padding:0; }
+h3 { font-size:11pt; margin:4mm 0 1.5mm; page-break-after: avoid; }
+p, li { margin:0 0 2.2mm; }
+ul,ol { margin:0 0 3mm; padding-left:5mm; }
+strong { font-weight:650; }
+table { width:100%; border-collapse:collapse; margin:0 0 4mm; font-size:9.3pt; page-break-inside:avoid; }
+th { text-align:left; background:#f0f0f0; font-weight:600; }
+th,td { border:1px solid #c8c8c8; padding:1.6mm 2.2mm; vertical-align:top; }
+code { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:9pt; background:#f2f2f2; padding:0.3mm 1mm; border-radius:2px; }
+pre { background:#f6f6f6; border-left:2.5px solid #999; padding:2.5mm 3mm; margin:0 0 3.5mm; white-space:pre; line-height:1.35; page-break-inside:avoid; }
+pre code { background:none; padding:0; font-size:8.6pt; }
+hr { border:0; border-top:1px solid #ddd; margin:6mm 0; }
+
+blockquote { background:#fcf6e3; border-left:3px solid #c9a227; margin:0 0 4mm; padding:2.5mm 3mm; font-size:9.6pt; page-break-inside:avoid; }
+blockquote p { margin:0; }
+</style></head><body><h1>Phase 2 Report</h1>
+<h2>Harden, Recover and Troubleshoot</h2>
+<p><strong>Team PowerPuffBoys, Section A</strong></p>
+<table>
+<thead>
+<tr>
+<th>Member</th>
+<th>Enrollment</th>
+<th>Machine</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hrishi Dongre</td>
+<td>2401010191</td>
+<td>Mac 3, 10.7.8.234</td>
+<td>Backend A, standby edge</td>
+</tr>
+<tr>
+<td>Pampana Sree Adithya</td>
+<td>2401010315</td>
+<td>Mac 1, 10.7.17.223</td>
+<td>Primary DNS</td>
+</tr>
+<tr>
+<td>Vedant Madne</td>
+<td>2401010499</td>
+<td>Mac 4, 10.7.2.238</td>
+<td>Backend B</td>
+</tr>
+<tr>
+<td>Vetriselvan R</td>
+<td>2401010501</td>
+<td>Mac 2, 10.7.17.226</td>
+<td>Edge proxy, load balancer, backup DNS</td>
+</tr>
+</tbody>
+</table>
+<p>Private domain <code>powerpuffboys.test</code>. DNS TTL 30 seconds. Backends on ports 3001 and
+3002. Edge on 80 and 443 with TLS terminated at nginx.</p>
+<hr />
+<h2>1. Architecture</h2>
+<pre><code>              dig app.powerpuffboys.test
+   client  -------------------------------&gt;  Mac 1  dnsmasq   primary DNS
+     |                                       Mac 2  dnsmasq   backup DNS
+     |      answer: 10.7.17.226, TTL 30
+     |
+     |      https://app.powerpuffboys.test
+     +------------------------------------&gt;  Mac 2  nginx, TLS terminates here
+                                               |
+                                 round robin    +--&gt; Mac 3  Backend A :3001
+                                                +--&gt; Mac 4  Backend B :3002
+</code></pre>
+<p>A client resolves the private name through the team's own DNS, opens an HTTPS
+connection to the edge, and the edge forwards the request as plain HTTP over the
+trusted LAN to one of two backends. The client never learns a backend address.</p>
+<hr />
+<h2>2. What changed from Phase 1</h2>
+<p>Phase 1 delivered the path above, but three defects only surfaced once we began
+breaking things deliberately.</p>
+<p><strong>nginx had no failure detection.</strong> The upstream pool carried no <code>max_fails</code> or
+<code>fail_timeout</code>, so a stopped backend stayed in rotation and roughly every second
+request failed instead of failing over. Phase 2 adds <code>max_fails=2</code>,
+<code>fail_timeout=10s</code> and <code>proxy_next_upstream</code>, so a request that lands on a dead
+backend is retried against the healthy one inside the same request, and the dead
+backend is ejected from rotation for ten seconds.</p>
+<p><strong><code>/api/items</code> was load balanced although it exists only on Backend B</strong>, so about
+half of those requests returned 404. It now has a dedicated upstream.</p>
+<p><strong>The two backends disagreed about caching.</strong> Backend A set <code>Cache-Control</code> and
+<code>ETag</code> on every route, Backend B only on <code>/</code>. The same URL therefore cached
+differently depending on which backend answered. Backend B now matches A.</p>
+<p>All configuration also moved into a single file, <code>phase2/hosts.env</code>. The Phase 1
+configs contained hardcoded addresses from October that DHCP had long since
+reassigned, which made the whole system look broken at several layers at once. Each
+machine now renders its own config from that shared file, and a mismatch is a one
+line fix rather than four.</p>
+<hr />
+<h2>3. Extension A - Backup DNS resolver</h2>
+<p>A second dnsmasq serves identical records, and every client lists both resolvers.</p>
+<p><strong>The backup is not on the machine we originally planned.</strong> Vedant's Mac is enrolled
+in the college MDM. Its firewall has dnsmasq set to "block incoming connections",
+and <code>socketfilterfw</code> refuses every change with <em>"Firewall settings cannot be
+modified from command line on managed Mac computers."</em></p>
+<p>We proved that was the cause rather than assuming it. dnsmasq was listening
+correctly on the LAN address:</p>
+<pre><code>udp4   10.7.2.238.53    LISTEN
+tcp4   10.7.2.238.53    LISTEN
+</code></pre>
+<p>but its own query log only ever recorded local traffic:</p>
+<pre><code>query[A] app.powerpuffboys.test from 127.0.0.1
+query[A] app.powerpuffboys.test from 127.0.0.1
+</code></pre>
+<p>Queries from other machines never reached the process, so the block was below
+dnsmasq, in the firewall. The backup therefore runs on Mac 2, which the brief
+permits since it only forbids Mac 1.</p>
+<p>Verified state:</p>
+<pre><code>PASS  dnsmasq running
+PASS  app.powerpuffboys.test -&gt; 10.7.17.226
+PASS  TTL is 30
+PASS  answers on the LAN address 10.7.17.226, so other Macs can use it
+
+primary: app.powerpuffboys.test.  TTL 30  -&gt;  10.7.17.226
+backup : app.powerpuffboys.test.  TTL 30  -&gt;  10.7.17.226
+client resolver list: 10.7.17.223  10.7.17.226
+</code></pre>
+<p><strong>DNS failure versus application failure.</strong> They look nothing alike from the client.
+When DNS fails the name does not resolve at all, yet the service is perfectly
+healthy and still reachable by address. When the application fails the name resolves
+correctly and the failure happens afterwards, at the connection or in the response.
+One is the phone book being missing, the other is nobody answering the phone.</p>
+<p><strong>Tradeoff we accepted.</strong> The edge machine now carries two roles, so losing Mac 2
+removes both the front door and the backup resolver. In a real deployment those
+would be separate machines; here the alternative machine is centrally managed and
+cannot accept inbound DNS.</p>
+<blockquote>
+<p><strong>To record during the demonstration:</strong> the time the primary was stopped, what <code>dig app.powerpuffboys.test</code> returned from a client while it was down, and the time it was restarted.</p>
+</blockquote>
+<hr />
+<h2>4. Extension B - TTL and controlled record change</h2>
+<p>Records are served with a 30 second TTL:</p>
+<pre><code>app.powerpuffboys.test. 30  IN  A   10.7.17.226
+</code></pre>
+<p><code>phase2/dns/cutover.sh &lt;new-ip&gt;</code> rewrites the <code>app</code> record and reloads dnsmasq.</p>
+<p><strong>A mistake we made and corrected.</strong> Our first attempt used <code>dig</code> to show the cached
+answer surviving. <code>dig</code> queries the server directly and bypasses the macOS resolver
+cache, so it reported the new address immediately and appeared to prove the TTL did
+nothing. To observe a cached answer you must go through the system resolver:</p>
+<pre><code>dscacheutil -q host -a name app.powerpuffboys.test
+</code></pre>
+<p><code>dig</code> is then useful for the opposite purpose, showing what the server is already
+handing out while clients still hold the old answer. The contrast between the two
+commands is the demonstration.</p>
+<p><strong>Why this matters in production.</strong> This is exactly how traffic is moved between
+machines without downtime. The TTL is lowered in advance, the record is changed, and
+for one TTL window old and new clients coexist, both being served correctly. Only
+after the window has passed can the old machine be retired.</p>
+<blockquote>
+<p><strong>To record during the demonstration:</strong> the time of the record change, what <code>dscacheutil</code> returned immediately before and after, how long the cached answer survived, and what changed after <code>flush_cache.sh</code>.</p>
+</blockquote>
+<hr />
+<h2>5. Extension C - Service isolation</h2>
+<p>pf rules on each backend machine block ports 3001 and 3002 from everything except
+the edge. pf applies the last matching rule, so the ruleset blocks first and passes
+the edge afterwards:</p>
+<pre><code>block drop in proto tcp from any to any port { 3001, 3002 }
+pass in proto tcp from 10.7.17.226 to any port { 3001, 3002 }
+pass in proto tcp from 10.7.8.234 to any port { 3001, 3002 }
+</code></pre>
+<p>The macOS anchors are re-included in the same ruleset, which is why the machines'
+normal networking continues to work after <code>pfctl -f</code>:</p>
+<pre><code>Loading anchor com.apple from /etc/pf.anchors/com.apple
+pf enabled
+</code></pre>
+<p><strong>Before</strong>, from a client machine:</p>
+<pre><code>direct to backend A 10.7.8.234:3001    REACHABLE
+direct to backend B 10.7.2.238:3002    REACHABLE
+through the edge                       200
+</code></pre>
+<p><strong>After</strong>, tested from both sides, which is the point of the extension:</p>
+<pre><code>from the edge   10.7.17.226    backend A 3001 : 200       allowed
+from the edge   10.7.17.226    backend B 3002 : 200       allowed
+from a client   10.7.2.238     to 3001        : blocked
+service by name through the edge        200, A B A B A B A B
+</code></pre>
+<p>The backends are now unreachable to everything except the front door, and the
+service is unaffected. Rollback is <code>phase2/firewall/rollback.sh</code>, which restores
+<code>/etc/pf.conf</code>, and was run after the demonstration.</p>
+<hr />
+<h2>6. Extension D - High availability failover</h2>
+<p>Normal operation alternates cleanly between the two backends:</p>
+<pre><code>backend B  upstream 10.7.2.238:3002
+backend A  upstream 10.7.8.234:3001
+backend B  upstream 10.7.2.238:3002
+backend A  upstream 10.7.8.234:3001
+... ten requests, five to each
+</code></pre>
+<p><strong>We observed genuine failover without arranging it.</strong> Vedant's Mac dropped off the
+Wi-Fi mid-session. The next ten requests were served entirely by Backend A with no
+client-visible error:</p>
+<pre><code>10 requests by name    A A A A A A A A A A
+</code></pre>
+<p>A separate capture shows the mechanism. The <code>X-Upstream</code> header lists two addresses
+on the requests where nginx tried the dead backend first and moved on within the
+same request. After two such failures the dead backend was ejected for ten seconds,
+and subsequent requests went straight to the healthy one:</p>
+<pre><code>backend A  upstream 10.7.8.234:3001
+backend A  upstream 10.7.2.238:3002,     &lt;- tried B, failed, retried A
+backend A  upstream 10.7.8.234:3001
+backend A  upstream 10.7.2.238:3002,
+backend A  upstream 10.7.8.234:3001
+backend A  upstream 10.7.8.234:3001      &lt;- B now ejected from rotation
+</code></pre>
+<p>With both backends stopped the edge returns a clean 502 on every request, which is
+the correct behaviour. DNS and TLS still succeed; only the application layer fails,
+which tells you exactly where the boundary between edge and backend lies.</p>
+<p><strong>Remaining single point of failure: the edge.</strong> Both backends can be perfectly
+healthy and the service is still unreachable if Mac 2 goes down, and that machine
+now also carries the backup resolver. Removing it would require two edges sharing
+one address: two A records for the name so DNS spreads clients across both, a
+floating address that can move between them, or a layer 4 balancer in front of both.
+Extension E is that migration performed by hand.</p>
+<blockquote>
+<p><strong>To record during the demonstration:</strong> the time Backend A was stopped, the ten request output while it was down, the time it was restarted, and the output afterwards.</p>
+</blockquote>
+<hr />
+<h2>7. Extension E - Controlled edge migration</h2>
+<p>A second nginx runs on Mac 3 with the same configuration, started with
+<code>./phase2/run.sh edge-standby</code>. It tags every response <code>X-Edge: standby</code>, so the
+switch is visible in the response headers rather than having to be taken on trust.
+The certificate and key are copied across with <code>scp</code>, never through git, because the
+private key must not enter the repository.</p>
+<p>The DNS record for <code>app</code> is then pointed at Mac 3. Because of the 30 second TTL,
+clients holding a cached answer continue to reach the old edge while new lookups go
+to the standby, and both serve correctly during that window.</p>
+<blockquote>
+<p><strong>To record during the demonstration:</strong> the time of the cutover, the <code>X-Edge</code> header before and after, and how long before cached clients moved to the standby.</p>
+</blockquote>
+<hr />
+<h2>8. Extension F - Troubleshooting method</h2>
+<p>We work from the bottom up: network, DNS, TCP, TLS, application. A fault low in the
+stack makes every layer above it look broken, so starting at the browser wastes
+time. <code>phase2/troubleshoot/diagnose.sh</code> walks all five and stops at the first
+failure.</p>
+<p><strong>Case 1, during setup, the service stopped resolving.</strong> The layered check isolated
+it in seconds:</p>
+<pre><code>edge by IP, bypassing DNS    200
+backend A direct             200
+backend B direct             200
+TCP 53 on the primary DNS    closed
+</code></pre>
+<p>Everything above the DNS layer was healthy, so the diagnosis was one stopped
+service, not a broken system.</p>
+<p><strong>Case 2, the backup resolver answered locally but not over the network.</strong> Ping
+succeeded. The port accepted connections. The configuration was correct and
+identical to the working primary. Only the query log settled it, by proving the
+packets were never arriving, which pointed below dnsmasq to the firewall. That
+became section 3.</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Question</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Network</td>
+<td>Can I reach the machine at all?</td>
+<td><code>ping 10.7.17.226</code></td>
+</tr>
+<tr>
+<td>DNS</td>
+<td>Does the name become an address?</td>
+<td><code>dig app.powerpuffboys.test</code></td>
+</tr>
+<tr>
+<td>TCP</td>
+<td>Is the port open?</td>
+<td><code>nc -z 10.7.17.226 443</code></td>
+</tr>
+<tr>
+<td>TLS</td>
+<td>Is the certificate accepted?</td>
+<td><code>openssl s_client -connect 10.7.17.226:443</code></td>
+</tr>
+<tr>
+<td>HTTP</td>
+<td>Does the application answer?</td>
+<td><code>curl -i https://app.powerpuffboys.test/api/status</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>9. Test results</h2>
+<table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Expected</th>
+<th>Observed</th>
+<th>Pass</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Both resolvers answer identically</td>
+<td>same record, TTL 30</td>
+<td>both returned 10.7.17.226, TTL 30</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Backup answers on its LAN address</td>
+<td>reachable from other Macs</td>
+<td>yes, on 10.7.17.226</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>HTTPS by name, no <code>-k</code></td>
+<td>200, certificate trusted</td>
+<td>200, verify code 0, HTTP/2, TLS 1.3</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Load balancing</td>
+<td>both backends serve</td>
+<td>alternating A B A B over 10 requests</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Conditional request</td>
+<td>304 Not Modified</td>
+<td>200, then 304 with the ETag</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Backend unavailable</td>
+<td>traffic continues, no client error</td>
+<td>10 of 10 returned 200 from the survivor</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Backend restored</td>
+<td>both back in rotation</td>
+<td>alternating A B confirmed</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Both backends stopped</td>
+<td>clean 502 at the edge</td>
+<td>502 on every request</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Direct access to 3001 from a client</td>
+<td>blocked</td>
+<td>blocked after pf rules loaded</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Direct access from the edge</td>
+<td>allowed</td>
+<td>200 on both 3001 and 3002</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Primary DNS stopped</td>
+<td>clients resolve via backup</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Record changed, TTL 30</td>
+<td>cached answer survives, then flips</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Edge cutover via DNS</td>
+<td>new lookups reach the standby</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>TLS detail recorded at the edge:</p>
+<pre><code>status 200   verify 0 (trusted)   HTTP/2
+Protocol: TLSv1.3
+Cipher:   TLS_AES_256_GCM_SHA384
+subject=CN=powerpuffboys.test
+issuer=CN=PowerPuffBoys Local CA
+Verify return code: 0 (ok)
+</code></pre>
+<hr />
+<h2>10. Learning summary</h2>
+<p><strong>Extension A.</strong> Running a second resolver is easy; making it usable is not. The
+service was correct and listening on the right address from the first attempt, and
+still no other machine could use it, because a host firewall was dropping packets
+before the process saw them. The lesson is that "the service is running" and "the
+service is reachable" are separate claims needing separate evidence.</p>
+<p><strong>Extension B.</strong> A TTL is a promise about how stale an answer may be, and the client
+is the one keeping that promise, not the server. That is why our first attempt
+proved nothing: we measured the server with <code>dig</code> when the behaviour we wanted to
+show lived in the client's cache. It also explains why production cutovers lower the
+TTL in advance rather than at the moment of the change.</p>
+<p><strong>Extension C.</strong> Putting a reverse proxy in front of the backends is not only about
+sharing load. Once clients have no reason to reach a backend directly, you can
+remove their ability to, and the firewall rule is a two line statement of something
+the architecture already implied.</p>
+<p><strong>Extension D.</strong> Failover is not automatic just because there are two servers. Our
+Phase 1 nginx had two backends and still failed every second request, because
+nothing told it to notice a dead one. Three directives changed that from a broken
+service into an invisible one.</p>
+<p><strong>Extension E.</strong> DNS is a control plane. Changing where a name points moves real
+traffic between machines, and the TTL decides how long the two worlds overlap. It is
+the cheapest migration tool available and needs no new hardware.</p>
+<p><strong>Extension F.</strong> Diagnosing by layer turned two confusing failures into single
+sentences. In both cases the symptom appeared at the top of the stack and the cause
+was several layers below it, and the habit of testing upward from the network is
+what found them quickly.</p>
+<hr />
+<h2>11. Deliverables</h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Location</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Configuration for every machine</td>
+<td><code>phase2/</code>, rendered from <code>phase2/hosts.env</code></td>
+</tr>
+<tr>
+<td>One command per machine</td>
+<td><code>phase2/run.sh &lt;role&gt;</code></td>
+</tr>
+<tr>
+<td>Per role verification</td>
+<td><code>phase2/verify.sh &lt;role&gt;</code></td>
+</tr>
+<tr>
+<td>Backend source</td>
+<td><code>backend_A.js</code>, <code>backend_B.py</code></td>
+</tr>
+<tr>
+<td>Firewall rules and rollback</td>
+<td><code>phase2/firewall/</code></td>
+</tr>
+<tr>
+<td>Troubleshooting runbook</td>
+<td><code>phase2/troubleshoot/runbook.md</code></td>
+</tr>
+<tr>
+<td>Evidence and capture helpers</td>
+<td><code>phase2/evidence/</code></td>
+</tr>
+<tr>
+<td>Demonstration checklist</td>
+<td><code>phase2/evidence/checklist.md</code></td>
+</tr>
+</tbody>
+</table></body></html>
