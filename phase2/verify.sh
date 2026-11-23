@@ -36,7 +36,8 @@ check_edge() {
   pgrep -q nginx && ok "nginx running" || fail "nginx not running"
   local code; code=$(curl -s -o /dev/null -w '%{http_code}' "https://app.$DOMAIN/api/status")
   [ "$code" = 200 ] && ok "https works with no -k" || fail "https returned $code"
-  local seen; seen=$(for i in $(seq 1 10); do curl -s -D- -o /dev/null "https://app.$DOMAIN/api/status" | awk '/^X-Backend:/{print $2}'; done | tr -d '\r' | sort -u | tr '\n' ' ')
+  # HTTP/2 hands the headers back lowercased, so match either spelling.
+  local seen; seen=$(for i in $(seq 1 10); do curl -s -D- -o /dev/null "https://app.$DOMAIN/api/status" | awk 'tolower($1)=="x-backend:"{print $2}'; done | tr -d '\r' | sort -u | tr '\n' ' ')
   echo "$seen" | grep -q A && echo "$seen" | grep -q B && ok "load balancing hits both: $seen" || fail "only saw: $seen"
 }
 
