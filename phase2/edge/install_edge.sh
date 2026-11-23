@@ -12,8 +12,12 @@ d="$root/phase2/edge/certs"
 [ -f "$d/server.crt" ] || { echo "no cert yet - run make_certs.sh first (or scp certs/ from the primary edge)"; exit 1; }
 
 sudo mkdir -p "$brew/etc/nginx/certs" "$brew/etc/nginx/servers"
-sudo cp "$d/server.crt" "$d/server.key" "$brew/etc/nginx/certs/"
-sudo chmod 600 "$brew/etc/nginx/certs/server.key"
+# Only copy if it differs, so an already working certificate is left alone.
+cmp -s "$d/server.crt" "$brew/etc/nginx/certs/server.crt" || {
+  sudo cp "$d/server.crt" "$d/server.key" "$brew/etc/nginx/certs/"
+  sudo chmod 600 "$brew/etc/nginx/certs/server.key"
+  echo "installed the certificate from the repo"
+}
 
 render "$root/phase2/edge/powerpuffboys.conf.tmpl" \
   | sed -e "s|__BREW__|$brew|g" -e "s|__EDGE_ROLE__|$role|g" \

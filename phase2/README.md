@@ -34,9 +34,13 @@ them for the review, but do not run from them any more. Three things changed:
   that DHCP has almost certainly reassigned. `phase2/dns/` generates the same
   records from `hosts.env` instead, and keeps the Phase 1 wildcard record so
   `https://powerpuffboys.test/` still works
-- the Phase 1 certificate was self-signed with no subjectAltName, which modern
-  Chrome rejects outright. `phase2/edge/make_certs.sh` makes a small local CA and
-  a cert carrying all three names
+- the certificate is unchanged. `TLS/README.md` documents a plain
+  `openssl req -x509` command, which would produce a certificate with no
+  subjectAltName that Chrome rejects, but that is not what is actually installed:
+  the real cert on the edge is signed by "PowerPuffBoys Local CA" and carries
+  `powerpuffboys.test` plus the wildcard `*.powerpuffboys.test`, valid to
+  September 2027. `phase2/edge/make_certs.sh` detects that and reuses it, so
+  nobody has to trust a second root. Worth correcting that README before the viva
 - the Phase 1 nginx had no failover settings, so a dead backend produced 502s
   instead of being taken out of rotation
 
