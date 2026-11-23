@@ -22,7 +22,7 @@ Save every screenshot into `phase2/evidence/` named by step number.
 | Ext | What to show | Commands |
 | --- | --- | --- |
 | A backup DNS | client keeps resolving after the primary dies | `./phase2/verify.sh client`, then Adi runs `sudo brew services stop dnsmasq`, then `dig app.powerpuffboys.test +short` still answers |
-| B TTL | old answer survives, then flips | `dig app... +noall +answer` (note TTL counting down), Adi runs `./phase2/dns/cutover.sh <new-ip>`, client still gets the old IP, then after 30s the new one, then `./phase2/dns/flush_cache.sh` for the instant change |
+| B TTL | old answer survives, then flips | Client first runs `dscacheutil -q host -a name app.powerpuffboys.test` to cache it. Adi runs `./phase2/dns/cutover.sh <new-ip>`. Client repeats the same `dscacheutil` command and still sees the OLD address for up to 30s, while `dig app... +short` already shows the new one. Then `./phase2/dns/flush_cache.sh` and the cached one flips immediately. Do NOT use `dig` to show the cached answer, it bypasses the cache |
 | C isolation | client blocked, edge allowed | Hrishi and Vedant run `./phase2/run.sh isolate`, client runs `./phase2/firewall/check_isolation.sh` |
 | D HA failover | traffic continues on one backend, resumes on two | stop Backend A, run step 5, restart it, run step 5 again |
 | E edge cutover | DNS moves the edge | Hrishi runs `./phase2/run.sh edge-standby`, Adi runs `cutover.sh <hrishi-ip>`, client sees `X-Edge: standby` |

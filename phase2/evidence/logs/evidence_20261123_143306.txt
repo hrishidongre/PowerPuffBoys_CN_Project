@@ -1,0 +1,73 @@
+Team PowerPuffBoys, Phase 2 evidence
+collected 2026-11-23 14:33:06
+
+=== 1. machine map ===
+primary DNS            10.7.17.223
+backup DNS             10.7.17.226
+edge                   10.7.17.226
+standby edge           10.7.8.234
+backend A              10.7.8.234:3001
+backend B              10.7.2.238:3002
+
+=== 2. reachability ===
+primary DNS            10.7.17.223      reachable
+backup DNS             10.7.17.226      reachable
+edge                   10.7.17.226      reachable
+backend A              10.7.8.234       reachable
+backend B              10.7.2.238       reachable
+
+=== 3. DNS, both resolvers, Extension A ===
+client resolver list: 10.7.17.223 10.7.17.226 
+--- primary ---
+
+; <<>> DiG 9.10.6 <<>> @10.7.17.223 app.powerpuffboys.test +nocmd +noall +answer
+; (1 server found)
+;; global options: +cmd
+app.powerpuffboys.test.	30	IN	A	10.7.17.226
+--- backup ---
+
+; <<>> DiG 9.10.6 <<>> @10.7.17.226 app.powerpuffboys.test +nocmd +noall +answer
+; (1 server found)
+;; global options: +cmd
+app.powerpuffboys.test.	30	IN	A	10.7.17.226
+both answer with the same record and a TTL of 30
+
+=== 4. TTL counting down, Extension B ===
+same name three times, two seconds apart, through the client cache:
+app.powerpuffboys.test.	30	IN	A	10.7.17.226
+app.powerpuffboys.test.	30	IN	A	10.7.17.226
+app.powerpuffboys.test.	30	IN	A	10.7.17.226
+
+=== 5. TLS, no -k, certificate trusted ===
+status 200  tls verify 0 (0 = trusted)  http 2
+subject=CN=powerpuffboys.test
+issuer=CN=PowerPuffBoys Local CA
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Protocol: TLSv1.3
+Verify return code: 21 (unable to verify the first certificate)
+
+=== 6. load balancing, Extension D in normal state ===
+backend B  upstream 10.7.2.238:3002
+backend A  upstream 10.7.8.234:3001
+backend B  upstream 10.7.2.238:3002
+backend A  upstream 10.7.8.234:3001
+backend B  upstream 10.7.2.238:3002
+backend A  upstream 10.7.8.234:3001
+backend B  upstream 10.7.2.238:3002
+backend A  upstream 10.7.8.234:3001
+backend B  upstream 10.7.2.238:3002
+backend A  upstream 10.7.8.234:3001
+
+=== 7. caching, fresh then conditional ===
+HTTP/2 200 
+cache-control: max-age=60
+etag: "backend-b-v1"
+--- same request again, this time sending the ETag back ---
+HTTP/2 304 
+cache-control: max-age=60
+etag: "backend-a-v1"
+
+=== 8. service isolation, Extension C ===
+direct from this client to backend A    10.7.8.234:3001  REACHABLE (isolation not applied yet)
+direct from this client to backend B    10.7.2.238:3002  REACHABLE (isolation not applied yet)
+through the edge instead: 200

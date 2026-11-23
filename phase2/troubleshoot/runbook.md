@@ -43,6 +43,12 @@ curl -i https://app.powerpuffboys.test/api/status  # application, headers includ
   half the requests 404ed. It now has its own upstream.
 - A stale DNS answer survives a config change for up to the TTL. That is the
   Extension B demo, and also a false alarm during troubleshooting.
+- `dig` bypasses the macOS DNS cache and asks the server directly. During the
+  Extension B demo it will show a changed record immediately, which makes it look
+  like the TTL does nothing. To show a cached answer surviving, use the system
+  resolver instead: `dscacheutil -q host -a name app.powerpuffboys.test`, or
+  `ping -c1 app.powerpuffboys.test`, or a browser. Use `dig` only to prove what
+  the server is now handing out.
 - The two backends use different ETag values for the same URL ("backend-a-v1" and
   "backend-b-v1"). A client that cached from A and then revalidates against B gets
   a fresh 200 instead of a 304. That is not a fault, it is what happens when you
