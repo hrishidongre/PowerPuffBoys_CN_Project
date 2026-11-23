@@ -1,0 +1,49 @@
+# Team PowerPuffBoys edge. Generated from phase2/hosts.env - do not edit by hand.
+
+# Extension D: max_fails + fail_timeout are what let nginx take a dead backend
+# out of rotation instead of serving every other request as a 502.
+upstream backends {
+    server __BACKEND_A_IP__:__BACKEND_A_PORT__ max_fails=2 fail_timeout=10s;
+    server __BACKEND_B_IP__:__BACKEND_B_PORT__ max_fails=2 fail_timeout=10s;
+}
+
+# /api/items only exists on Backend B, so it must not be round robined.
+upstream backend_b_only {
+    server __BACKEND_B_IP__:__BACKEND_B_PORT__ max_fails=2 fail_timeout=10s;
+}
+
+server {
+    listen __EDGE_HTTP_PORT__;
+    listen __EDGE_HTTPS_PORT__ ssl;
+    http2 on;
+    # ".__DOMAIN__" matches the bare domain and every subdomain, so the phase 1
+    # demo URL https://__DOMAIN__/ keeps working alongside app. and api.
+    server_name .__DOMAIN__;
+
+    ssl_certificate     __BREW__/etc/nginx/certs/server.crt;
+    ssl_certificate_key __BREW__/etc/nginx/certs/server.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_connect_timeout 2s;
+
+    # Move to the other backend instead of returning the error to the client.
+    proxy_next_upstream error timeout http_502 http_503 http_504;
+    proxy_next_upstream_tries 2;
+
+    location / {
+        proxy_pass http://backends;
+        add_header X-Upstream $upstream_addr always;
+        add_header X-Edge __EDGE_ROLE__ always;
+    }
+
+    location = /api/items {
+        proxy_pass http://backend_b_only;
+        add_header X-Upstream $upstream_addr always;
+        add_header X-Edge __EDGE_ROLE__ always;
+        add_header Cache-Control "public, max-age=60";
+    }
+}

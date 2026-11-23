@@ -1,1 +1,12 @@
 node_modules/
+
+# Phase 2
+phase2/edge/certs/*.key
+phase2/edge/certs/*.csr
+phase2/edge/certs/*.srl
+phase2/edge/certs/server.cnf
+phase2/evidence/captures/
+phase2/**/.pf_state_before.txt
+phase2/dns/.dns_backup_*.txt
+.venv/
+.DS_Store
